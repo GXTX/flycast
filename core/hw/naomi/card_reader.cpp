@@ -25,6 +25,12 @@
 #include <memory>
 #include <errno.h>
 
+#define YAC_HACK
+#ifdef YAC_HACK
+#include <vector>
+#include <windows.h>
+#endif
+
 namespace card_reader {
 
 class CardReaderWriter
@@ -131,6 +137,36 @@ protected:
 class SanwaCRP1231BR : public CardReaderWriter, public SerialPort::Pipe
 {
 public:
+#ifdef YAC_HACK
+	void write(u8 b) override
+	{
+		DWORD dwRet = 0;
+		WriteFile(pipe_h, &b, 1, &dwRet, NULL);
+	}
+
+	u8 read() override
+	{
+		u8 buffer = 0;
+		DWORD dwRet = 0;
+		BOOL bRet = ReadFile(pipe_h, &buffer, 1, &dwRet, NULL);
+
+		return buffer;
+	}
+
+	int available() override
+	{
+		DWORD dwBytes = 0;
+		if (PeekNamedPipe(pipe_h, 0, 0, 0, &dwBytes, 0) == 0) {
+			DWORD error = ::GetLastError();
+			if (error == ERROR_BROKEN_PIPE) {
+				DisconnectNamedPipe(pipe_h);
+				ConnectNamedPipe(pipe_h, NULL);
+			}
+			return 0;
+		}
+		return dwBytes;
+	}
+#else
 	void write(u8 b) override
 	{
 		if (inBuffer.empty() && b == ENQ)
@@ -186,6 +222,7 @@ public:
 	int available() override {
 		return outBuffer.size();
 	}
+#endif
 
 protected:
 	enum Commands
@@ -357,6 +394,11 @@ protected:
 	static constexpr u32 TRACK_SIZE = 0x45;
 	u8 cardData[TRACK_SIZE * 3];
 	bool doorOpen = false;
+	bool cardInserted = false;
+
+#ifdef YAC_HACK
+	HANDLE pipe_h = nullptr;
+#endif
 };
 
 class SanwaCRP1231LR : public SanwaCRP1231BR
@@ -377,10 +419,20 @@ class InitialDCardReader final : public SanwaCRP1231BR
 {
 public:
 	InitialDCardReader() {
+#ifdef YAC_HACK
+		pipe_h = CreateFileA("\\\\.\\pipe\\YACardEmu", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED, NULL);
+		//DWORD error = ::GetLastError();
+		//if (error != 0) {
+			//DEBUG_LOG(NAOMI, "ERROR: %d", error);
+		//}
+#endif
 		SCIFSerialPort::Instance().setPipe(this);
 	}
 
 	~InitialDCardReader() {
+#ifdef YAC_HACK
+		CloseHandle(pipe_h);
+#endif
 		SCIFSerialPort::Instance().setPipe(nullptr);
 	}
 };
